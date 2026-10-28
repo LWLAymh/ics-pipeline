@@ -128,7 +128,7 @@ function renderDiagram(s) {
     <defs><pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".65" class="diagram-dot"/></pattern></defs><rect x="0" y="0" width="1440" height="450" fill="url(#dots)"/>
     ${[256,576,856,1136].map(x => `<path class="stage-separator" d="M${x} 12 V432"/>`).join('')}
     ${wire('pc-prediction', 'M221 80 H235 V22 H10 V80 H34', active('F') && s.pcReason === '预测 PC', COLORS.F, `F.predPC = ${hex(sim.F.predPC)}；${[OP.JUMP,OP.CALL].includes(f.icode) ? '预测目标地址' : '顺序地址 valP'}`)}
-    ${wire('pc-branch', 'M1014 112 V38 H22 V92 H34', live && s.pcReason === '分支纠正', '#bc6d83', `分支预测失败时 f_pc = M.valA = ${hex(sim.M.valA)}`, 'control')}
+    ${wire('pc-branch', 'M867 284 H879 V38 H22 V92 H34', live && s.pcReason === '分支纠正', '#bc6d83', `分支预测失败时 f_pc = M.valA = ${hex(sim.M.valA)}`, 'control')}
     ${wire('pc-return', 'M1356 229 H1408 V9 H17 V103 H34', live && s.pcReason === 'ret 返回地址', '#bc6d83', `ret 返回地址 f_pc = W.valM = ${hex(sim.W.valM)}`, 'control')}
     ${wire('pc-output', 'M70 80 H93 V149 H60 V163', live, COLORS.F, `f_pc (${s.pcReason}) = ${hex(s.f_pc)}`)}
     ${wire('pc-imem', 'M93 185 H137', active('F'), COLORS.F, `指令内存地址 = ${hex(s.f_pc)}`)}
@@ -147,6 +147,7 @@ function renderDiagram(s) {
     ${wire('alu-b-register', 'M587 230 H633 V249 H641', codeE && [OP.ALU,OP.LOAD,OP.STORE,OP.CALL,OP.RET,OP.PUSH,OP.POP,OP.IADD].includes(sim.E.icode), COLORS.E, `E.valB = ${hex(sim.E.valB)}`)}
     ${wire('alu-b', 'M675 248 H699 V234 H720', codeE, COLORS.E, `aluB = ${hex(s.aluB)}`)}
     ${wire('alu-result', 'M780 202 H845', codeE, COLORS.E, `e_valE = ${hex(s.e_valE)} / ${s.e_valE}`)}
+    ${wire('execute-pass-a', 'M587 182 H603 V284 H845', codeE && [OP.STORE,OP.PUSH,OP.CALL,OP.POP,OP.RET,OP.JUMP].includes(sim.E.icode), COLORS.E, `E.valA = ${hex(sim.E.valA)}，传往 M，供写入、栈读取或分支纠正使用`)}
     ${wire('condition-test', 'M747 318 V291 H809 V125', codeE && [OP.MOV,OP.JUMP].includes(sim.E.icode), COLORS.E, `e_Cnd = ${Number(s.e_Cnd)}，条件码 ZF=${Number(sim.cc.ZF)} SF=${Number(sim.cc.SF)} OF=${Number(sim.cc.OF)}`)}
     ${wire('condition-out', 'M835 105 H845', codeE && sim.E.icode===OP.JUMP, COLORS.E, `分支条件 e_Cnd = ${Number(s.e_Cnd)}`)}
     ${wire('memory-address', 'M867 202 H927', codeM && [OP.LOAD,OP.STORE,OP.PUSH,OP.CALL].includes(sim.M.icode), COLORS.M, `访存地址 M.valE = ${hex(s.memoryAddress)}`)}
@@ -159,7 +160,8 @@ function renderDiagram(s) {
     ${wire('wb-e', 'M1365 180 H1380 V415 H322 V248 H342', codeW && sim.W.dstE!==NONE, COLORS.W, `写回端口 E：${regName(sim.W.dstE)} ← ${hex(sim.W.valE)}`)}
     ${wire('wb-m', 'M1365 229 H1395 V431 H310 V263 H342', codeW && sim.W.dstM!==NONE, COLORS.W, `写回端口 M：${regName(sim.W.dstM)} ← ${hex(sim.W.valM)}（相同目标时优先）`)}
     ${wire('forward-e', 'M811 202 V356 H520 V258', forwarding('E'), '#9971ce', s.forwards.filter(f=>f.from.startsWith('E')).map(f=>`${f.from} ${regName(f.reg)}=${hex(f.value)} → val${f.port}`).join('；') || '执行结果转发：e_valE → D', 'forward')}
-    ${wire('forward-m', 'M1082 229 V372 H530 V258', forwarding('M'), '#9971ce', s.forwards.filter(f=>f.from.startsWith('M')).map(f=>`${f.from} ${regName(f.reg)}=${hex(f.value)} → val${f.port}`).join('；') || '访存级结果转发：M.valE / m_valM → D', 'forward')}
+    ${wire('forward-m', 'M1082 229 V372 H530 V258', forwarding('M (valM)'), '#9971ce', s.forwards.filter(f=>f.from.startsWith('M (valM)')).map(f=>`${f.from} ${regName(f.reg)}=${hex(f.value)} → val${f.port}`).join('；') || '内存读取结果转发：m_valM → D', 'forward')}
+    ${wire('forward-m-e', 'M1094 147 V365 H540 V258', forwarding('M (valE)'), '#9971ce', s.forwards.filter(f=>f.from.startsWith('M (valE)')).map(f=>`${f.from} ${regName(f.reg)}=${hex(f.value)} → val${f.port}`).join('；') || '访存级 ALU 结果转发：M.valE → D', 'forward')}
     ${wire('forward-w', 'M1356 265 V389 H508 V258', forwarding('W'), '#9971ce', s.forwards.filter(f=>f.from.startsWith('W')).map(f=>`${f.from} ${regName(f.reg)}=${hex(f.value)} → val${f.port}`).join('；') || '写回级结果转发：W.valE / W.valM → D', 'forward')}
     ${pipelineReg(245,'F / D','D')}${pipelineReg(565,'D / E','E')}${pipelineReg(845,'E / M','M')}${pipelineReg(1125,'M / W','W')}
     <path class="mux ${live ? 'active' : ''}" d="M34 58 L70 70 V104 L34 117 Z"/>${label(49,91,'PC','mux-label')}
