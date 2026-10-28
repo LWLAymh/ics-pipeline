@@ -25,6 +25,7 @@
 .lecture-cell.bubble.current rect { fill: #fff1c4; }
 .lecture-cell.held text { fill: #b76b28; font-weight: 650; }
 .lecture-cell.held path { stroke: #c07830; stroke-width: 2.5; fill: none; }
+.lecture-stall-turn { stroke: #c07830; stroke-width: 2.3; stroke-linejoin: round; fill: none; pointer-events: none; }
 .lecture-row.canceled .lecture-instruction { fill: #b77278; text-decoration: line-through; }
 .lecture-row.canceled .lecture-cell { opacity: .5; }
 .lecture-highlight { pointer-events: none; transition: transform 200ms ease; }

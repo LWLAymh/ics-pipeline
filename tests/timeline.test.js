@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assemble, Pipeline } from '../src/core.js';
 import { EXAMPLES } from '../src/examples.js';
-import { buildTimeline } from '../src/timeline.js';
+import { buildTimeline, layoutTimelineRows } from '../src/timeline.js';
 
 const lecture = () => new Pipeline(assemble(EXAMPLES.find(example => example.id === 'lecture').source));
 const advance = (simulator, count) => { for (let i = 0; i < count; i++) simulator.step(); return buildTimeline(simulator.program, simulator); };
@@ -43,6 +43,34 @@ test('back and replay do not leave future cells or bubble tracks behind', () => 
   const model = buildTimeline(p.program, p);
   assert.equal(model.cycle, 6); assert.equal(model.rows.filter(row => row.bubble).length, 0);
   assert(model.rows.every(row => row.cells.every(cell => cell.cycle <= 6)));
+});
+
+test('stall opens a lane locally without moving the earlier F/D blocks down', () => {
+  const p = lecture(), before = advance(p, 6);
+  const oldRows = layoutTimelineRows(before.rows, before.cycle);
+  const oldAdd = oldRows.find(row => row.label.includes('addq'));
+  const after = advance(p, 1), rows = layoutTimelineRows(after.rows, after.cycle);
+  const add = rows.find(row => row.label.includes('addq'));
+  assert.deepEqual(add.cells.filter(cell => cell.cycle < 8).map(cell => cell.lane), oldAdd.cells.map(cell => cell.lane));
+  assert.equal(add.cells.find(cell => cell.cycle === 7).lane, 5);
+  assert.equal(add.cells.find(cell => cell.cycle === 8).lane, 6);
+  assert.equal(add.turns.length, 1); assert.equal(add.turns[0].cell.cycle, 8);
+  const halt = rows.find(row => row.label.includes('halt'));
+  assert.equal(halt.cells.find(cell => cell.cycle === 7).lane, 6);
+  assert.equal(halt.cells.find(cell => cell.cycle === 8).lane, 7);
+  const later = advance(p, 2), finalAdd = layoutTimelineRows(later.rows, later.cycle).find(row => row.id === add.id);
+  assert.deepEqual(finalAdd.cells.slice(0, add.cells.length).map(cell => cell.lane), add.cells.map(cell => cell.lane));
+});
+
+test('separate stalls create separate turns and rewind removes only the later one', () => {
+  const p = new Pipeline(assemble('irmovq $0x100, %rdi\nmrmovq 0(%rdi), %rax\naddq %rax, %rbx\nmrmovq 8(%rdi), %rcx\naddq %rcx, %rbx\nhalt\n.pos 0x100\n.quad 3, 4'));
+  advance(p, 4); const saved = p.snapshot();
+  p.run(); const model = buildTimeline(p.program, p), rows = layoutTimelineRows(model.rows, model.cycle);
+  const adds = rows.filter(row => row.label.includes('addq'));
+  assert.equal(adds.length, 2); assert(adds.every(row => row.turns.length === 1));
+  assert(adds[0].turns[0].cell.cycle < adds[1].turns[0].cell.cycle);
+  p.restore(saved); const restored = buildTimeline(p.program, p);
+  assert.equal(layoutTimelineRows(restored.rows, restored.cycle).flatMap(row => row.turns).filter(turn => turn.cell.stage === 'D').length, 1);
 });
 test('wrong-path instructions are crossed out only after the flush edge', () => {
   const p = new Pipeline(assemble('xorq %rax, %rax\njne wrong\nirmovq $1, %rax\nhalt\nwrong: irmovq $2, %rdx\nirmovq $3, %rbx\nhalt'));
