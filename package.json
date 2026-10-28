@@ -1,0 +1,13 @@
+{
+  "name": "ics-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A cycle-by-cycle Y86-64 PIPE datapath explorer for CS:APP",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "test": "node --test",
+    "build": "node scripts/build.mjs"
+  },
+  "engines": { "node": ">=22" }
+}
