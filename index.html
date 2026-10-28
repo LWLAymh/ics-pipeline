@@ -8,6 +8,7 @@
   <title>Y86-64 Pipeline Lab · ICS</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./src/style.css">
+  <link rel="stylesheet" href="./src/timeline.css">
 </head>
 <body>
   <header class="site-header">
@@ -17,16 +18,20 @@
   <main>
     <section class="intro" aria-label="模拟器概览">
       <div><p class="eyebrow">PROCESSOR ARCHITECTURE / CHAPTER 04</p><h1>看见每一个时钟周期<span class="title-dot">.</span></h1><p class="subtitle">写下 Y86-64 汇编，沿着数据通路理解流水线。</p></div>
-      <div class="metrics" aria-label="运行统计"><div><span class="metric-label">周期 CYCLE</span><strong id="cycle-count">0</strong></div><div><span class="metric-label">完成 INSTRUCTIONS</span><strong id="instruction-count">0</strong></div><div><span class="metric-label">CPI</span><strong id="cpi-count">—</strong></div><span class="status-pill" id="status-pill">就绪 · AOK</span></div>
+      <div class="metrics" aria-label="运行统计"><div title="已推进的时钟边沿数；周期动画从第 1 周期开始"><span class="metric-label">已推进 CYCLES</span><strong id="cycle-count">0</strong></div><div><span class="metric-label">完成 INSTRUCTIONS</span><strong id="instruction-count">0</strong></div><div><span class="metric-label">CPI</span><strong id="cpi-count">—</strong></div><span class="status-pill" id="status-pill">就绪 · AOK</span></div>
     </section>
 
     <section class="simulator" aria-label="五级流水线数据通路">
+      <div class="visualization-heading"><h2>流水线可视化</h2><div class="visualization-tabs" role="tablist" aria-label="可视化模式"><button id="view-datapath" role="tab" aria-controls="datapath-panel" aria-selected="true" data-view="datapath">数据通路</button><button id="view-timeline" role="tab" aria-controls="timeline-panel" aria-selected="false" data-view="timeline" tabindex="-1">周期动画 <span class="new-feature">NEW</span></button></div></div>
       <div class="toolbar">
         <div class="playback"><button id="compile" class="button primary" title="编译并复位（Ctrl+Enter）"><span aria-hidden="true">✓</span> 编译 / 复位</button><span class="toolbar-divider"></span><button id="back" class="button icon-button" aria-label="后退一个周期" title="后退（←）">↶</button><button id="step" class="button" title="执行一个时钟周期（→）">单步 <span aria-hidden="true">→</span></button><button id="run" class="button run-button" title="运行或暂停（空格）"><span aria-hidden="true">▶</span> 运行</button><button id="reset" class="button icon-button" aria-label="复位已编译程序" title="复位已编译程序">↺</button></div>
         <div class="toolbar-settings"><label for="speed">速度 <output id="speed-label">2 Hz</output></label><input id="speed" type="range" min="1" max="10" value="2" aria-label="每秒时钟周期数"><label class="checkbox-label"><input type="checkbox" id="animate" checked> 动画</label></div>
       </div>
+      <div id="datapath-panel" role="tabpanel" aria-labelledby="view-datapath">
       <div class="diagram-scroll"><div id="datapath" class="datapath" aria-label="Y86-64 五级流水线图"></div></div>
       <div class="diagram-footer"><div class="legend"><span><i class="legend-dot fetch"></i>取指</span><span><i class="legend-dot decode"></i>译码</span><span><i class="legend-dot execute"></i>执行</span><span><i class="legend-dot memory"></i>访存</span><span><i class="legend-dot writeback"></i>写回</span><span class="forward-legend">↳ 数据转发</span></div><div class="pipeline-mode">PIPE · 数据转发 · Load/use 暂停 · 预测跳转</div></div>
+      </div>
+      <div id="timeline-panel" role="tabpanel" aria-labelledby="view-timeline" hidden><div id="cycle-animation" class="cycle-animation" role="button" tabindex="0" aria-label="周期动画，点击推进一个周期" title="单击图表推进一个周期"></div></div>
     </section>
 
     <div class="cycle-notice" id="cycle-notice" aria-live="polite"><span class="notice-icon">i</span><span id="notice-text">程序已编译。点击「单步」，观察指令进入五级流水线。</span><span id="hazard-count" class="hazard-count">0 暂停 · 0 预测失败</span></div>

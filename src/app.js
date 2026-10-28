@@ -1,5 +1,6 @@
 import { assemble, Pipeline, REGISTERS, OP, NONE, hex, regName, readWord, MEMORY_SIZE, isTerminal } from './core.js';
 import { EXAMPLES } from './examples.js';
+import { buildTimeline, renderTimeline } from './timeline.js';
 
 const $ = id => document.getElementById(id);
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -7,6 +8,7 @@ const COLORS = { F: '#1c899b', D: '#8166b1', E: '#c78d2e', M: '#358675', W: '#b5
 const STAGE_NAMES = { F: ['取指', 'FETCH'], D: ['译码', 'DECODE'], E: ['执行', 'EXECUTE'], M: ['访存', 'MEMORY'], W: ['写回', 'WRITE BACK'] };
 let simulator, program, history = [], running = false, timer = null, pulseTimer = null, dirty = false;
 let currentTab = 'registers', numberFormat = 'hex', memoryStart = 0x100, runUntil = 5000, compiledSource = '', selectedExample = EXAMPLES[0];
+let visualization = new URL(window.location.href).searchParams.get('view') === 'timeline' ? 'timeline' : 'datapath';
 const source = $('source');
 const valueText = value => numberFormat === 'dec' ? String(value) : hex(value, 16);
 const shortHex = value => { const text = hex(value); return text.length > 14 ? text.slice(0, 6) + '…' + text.slice(-5) : text; };
@@ -85,7 +87,12 @@ function render() {
   $('reset').disabled = dirty || simulator.cycle === 0;
   $('edit-state').textContent = dirty ? '有修改 · 请编译' : '已编译'; $('edit-state').className = 'small-muted' + (dirty ? ' dirty' : '');
   $('hazard-count').textContent = `${simulator.stalls} 暂停 · ${simulator.flushes} 预测失败`;
-  renderNotice(s); renderDiagram(s); renderState(s);
+  renderNotice(s);
+  $('datapath-panel').hidden = visualization !== 'datapath';
+  $('timeline-panel').hidden = visualization !== 'timeline';
+  if (visualization === 'timeline') renderTimeline($('cycle-animation'), buildTimeline(program, simulator), $('animate').checked);
+  else renderDiagram(s);
+  renderState(s);
   for (const key of ['ZF', 'SF', 'OF']) { const flag = $('flag-' + key); flag.classList.toggle('on', simulator.cc[key]); flag.querySelector('b').textContent = Number(simulator.cc[key]); }
   $('writeback-caption').textContent = simulator.changedRegs.length ? '刚写回 ' + [...new Set(simulator.changedRegs)].map(regName).join(' / ') : '等待写回';
 }
@@ -256,8 +263,21 @@ function download() {
 $('examples').innerHTML = '<option value="custom">自定义程序 / 本地草稿</option>' + EXAMPLES.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
 $('examples').addEventListener('change',()=>{ const next=EXAMPLES.find(e=>e.id===$('examples').value); if(!next)return;selectedExample=next;source.value=next.source;source.scrollTop=0;lineNumbers();setExampleNote(next);memoryStart=next.id==='sum'?0x180:next.id==='stack'?0x1c0:0x100;compile(); });
 $('compile').addEventListener('click',compile);$('step').addEventListener('click',step);$('run').addEventListener('click',toggleRun);$('back').addEventListener('click',back);$('reset').addEventListener('click',reset);
+function selectVisualization(view) {
+  visualization = view;
+  document.querySelectorAll('[data-view]').forEach(button => { const selected = button.dataset.view === view; button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1; });
+  const url = new URL(window.location.href); if (view === 'timeline') url.searchParams.set('view', 'timeline'); else url.searchParams.delete('view');
+  window.history.replaceState(null, '', url);
+  if (simulator) render();
+}
+document.querySelectorAll('[data-view]').forEach(button => {
+  button.addEventListener('click', () => selectVisualization(button.dataset.view));
+  button.addEventListener('keydown', event => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); const view = event.key === 'Home' ? 'datapath' : event.key === 'End' ? 'timeline' : visualization === 'datapath' ? 'timeline' : 'datapath'; selectVisualization(view); $('view-' + view).focus(); });
+});
+$('cycle-animation').addEventListener('click', event => { if (event.target.closest('svg') && !running) step(); });
+$('cycle-animation').addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (!running) step(); } });
 $('speed').addEventListener('input',()=>{$('speed-label').textContent=$('speed').value+' Hz';});
-$('animate').addEventListener('change',()=>{if(!$('animate').checked){clearTimeout(pulseTimer);pulseTimer=null;}$('datapath').classList.toggle('flow',$('animate').checked&&running);});
+$('animate').addEventListener('change',()=>{if(!$('animate').checked){clearTimeout(pulseTimer);pulseTimer=null;}$('datapath').classList.toggle('flow',$('animate').checked&&running);$('cycle-animation').classList.toggle('animation-off',!$('animate').checked);});
 source.addEventListener('input',()=>{dirty=source.value!==compiledSource;stop(false);lineNumbers();saveDraft();$('examples').value='custom';setExampleNote(null);render();});
 source.addEventListener('scroll',()=>{$('line-numbers').scrollTop=source.scrollTop;});
 source.addEventListener('keydown',event=>{if(event.key==='Tab'){event.preventDefault();const start=source.selectionStart,end=source.selectionEnd;source.setRangeText('    ',start,end,'end');source.dispatchEvent(new Event('input'));}});
@@ -293,6 +313,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)st
 let draft='';try{draft=localStorage.getItem('ics-pipeline-source-v1')||'';}catch{}
 source.value=draft||EXAMPLES[0].source;selectedExample=EXAMPLES.find(e=>e.source===source.value)||null;
 $('examples').value=selectedExample?.id||'custom';setExampleNote(selectedExample);lineNumbers();compile();
+selectVisualization(visualization);
 
 // Read-only diagnostic view for browser QA and instructional console inspection.
 Object.defineProperty(window,'pipelineLab',{get:()=>({cycle:simulator?.cycle,status:simulator?.status,registers:simulator?.regs.map(String),cc:{...simulator?.cc},running,dirty,tab:currentTab})});

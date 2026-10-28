@@ -1,0 +1,51 @@
+[hidden] { display: none !important; }
+.visualization-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 19px; border-bottom: 1px solid var(--line); background: #fcfdfd; }
+.visualization-heading h2 { color: #687e88; font-size: 11px; font-weight: 500; }
+.visualization-tabs { display: flex; gap: 3px; border: 1px solid #dfe7e9; border-radius: 6px; padding: 3px; background: #f1f5f4; }
+.visualization-tabs button { display: flex; align-items: center; gap: 7px; background: transparent; border-radius: 4px; padding: 6px 12px; font-size: 11px; color: #8b9ba2; }
+.visualization-tabs button[aria-selected=true] { background: #fff; color: #315c4e; box-shadow: 0 1px 4px #263c3810; }
+.new-feature { font: 7px var(--mono); letter-spacing: .5px; color: #b58025; background: #fff2d6; border-radius: 2px; padding: 2px 3px; }
+.cycle-animation { padding: 19px 22px 12px; background: #fff; cursor: pointer; }
+.lecture-topline { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 0 1px 15px; }
+.lecture-kicker { color: #7b909c; font-size: 11px; letter-spacing: .7px; }
+.lecture-current { color: #ac711a; background: #fff5df; border: 1px solid #f5dfb2; padding: 5px 10px; border-radius: 5px; font: 11px var(--mono); }
+.lecture-scroll { overflow: auto; max-height: 540px; border: 1px solid #e7edf0; border-radius: 7px; scrollbar-width: thin; scrollbar-color: #d8e1e6 transparent; }
+.lecture-svg { display: block; max-width: none; min-width: 100%; font-family: var(--mono); overflow: hidden; }
+.lecture-background { fill: #fff; }
+.lecture-axis { font: 17px "Microsoft YaHei", system-ui, sans-serif; fill: #243e50; }
+.lecture-cycle { font-size: 18px; fill: #3f5970; }
+.lecture-cycle.selected { fill: #b96e10; font-weight: 700; }
+.lecture-cycle.future { fill: #afbac6; }
+.lecture-instruction { font-size: 15px; fill: #314c63; }
+.lecture-cell rect { fill: #e2eff9; stroke: #8095a8; stroke-width: 1.2; }
+.lecture-cell text { font-size: 21px; fill: #1d405f; }
+.lecture-cell.current rect { fill: #fde79b; }
+.lecture-cell.bubble rect { fill: #f1f4f7; stroke: #aebac5; stroke-dasharray: 4 3; }
+.lecture-row.bubble .lecture-instruction, .lecture-cell.bubble text { fill: #8c9daa; font-style: italic; }
+.lecture-cell.bubble.current rect { fill: #fff1c4; }
+.lecture-cell.held text { fill: #b76b28; font-weight: 650; }
+.lecture-cell.held path { stroke: #c07830; stroke-width: 2.5; fill: none; }
+.lecture-row.canceled .lecture-instruction { fill: #b77278; text-decoration: line-through; }
+.lecture-row.canceled .lecture-cell { opacity: .5; }
+.lecture-highlight { pointer-events: none; transition: transform 200ms ease; }
+.lecture-highlight rect { fill: #f59e0b; fill-opacity: .10; stroke: #ef9e16; stroke-width: 2.5; }
+.lecture-forwards { pointer-events: none; }
+.lecture-forwards > path { stroke: #0f766e; stroke-width: 2.4; fill: none; }
+.lecture-legend { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 17px; color: #91a0aa; font-size: 10px; padding: 14px 0 2px; }
+.lecture-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.lecture-swatch { width: 11px; height: 11px; background: #e2eff9; border: 1px solid #9caebd; border-radius: 2px; }
+.lecture-swatch.current { background: #fde79b; border-color: #e6b652; }
+.lecture-swatch.bubble { background: #f1f4f7; border: 1px dashed #aebac5; }
+.lecture-held { color: #b97a3b; }
+.lecture-canceled { color: #b77278; text-decoration: line-through; }
+.lecture-forward-key { color: #298878; }
+.animation-off .lecture-highlight { transition: none; }
+@media (prefers-reduced-motion: reduce) { .lecture-highlight { transition: none; } }
+@media (max-width: 800px) {
+  .visualization-heading { padding: 10px 12px; gap: 8px; }
+  .visualization-heading h2 { font-size: 10px; }
+  .visualization-tabs button { padding: 6px 8px; font-size: 10px; }
+  .cycle-animation { padding: 13px 12px 11px; }
+  .lecture-topline { padding-bottom: 12px; }
+  .lecture-legend { justify-content: flex-start; gap: 12px; font-size: 9px; }
+}

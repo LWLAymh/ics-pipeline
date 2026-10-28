@@ -28,5 +28,10 @@ export const EXAMPLES = [
     id: 'conditional', name: '06 · 条件移动与溢出', title: '条件码决定写回是否发生',
     description: '最大有符号整数加 1 发生溢出：SF = OF = 1，所以有符号比较并不认为结果小于 0。cmovl 不执行，cmovge 执行。',
     source: `# 条件移动使用 SF、ZF、OF\n.pos 0\n    irmovq $0x7fffffffffffffff, %rax\n    irmovq $1, %rbx\n    irmovq $42, %rdi\n    addq %rbx, %rax\n    cmovl %rdi, %rcx\n    cmovge %rdi, %rdx\n    halt\n`
+  },
+  {
+    id: 'lecture', name: '07 · 课件中的存储 / 加载', title: '03-Arch · 存储、加载与暂停',
+    description: '与课件方格动画相同的指令序列。最终 M[128] = 3，%rax = 13。',
+    source: `# 03-Arch：先存储，再加载\n.pos 0\n    irmovq $128, %rdx\n    irmovq $3, %rcx\n    rmmovq %rcx, 0(%rdx)\n    irmovq $10, %rbx\n    mrmovq 0(%rdx), %rax\n    addq %rbx, %rax\n    halt\n`
   }
 ];
