@@ -118,7 +118,7 @@ export function renderTimeline(host, model, animate = true, options = {}) {
   const rows = layoutTimelineRows(model.rows, model.cycle);
   const rowIndex = new Map(rows.map(row => [row.id, row.lane]));
   if (!host.querySelector('.lecture-scroll')) {
-    host.innerHTML = `<div class="lecture-scroll" tabindex="0" role="region" aria-label="流水线时序图，可滚动查看历史周期"><div class="lecture-canvas"><svg class="lecture-svg" role="img" aria-label="逐周期流水线动画"><title>单击方格推进一个周期</title><defs><marker id="timeline-arrowhead" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6" fill="none" stroke="#0f766e" stroke-width="1.5"/></marker></defs><rect class="lecture-background" width="100%" height="100%" rx="7"/><g class="lecture-grid"></g><g class="lecture-highlight"><rect x="0" y="7" rx="5"/></g><g class="lecture-forwards"></g></svg><svg class="lecture-labels" role="img" aria-label="指令列表"></svg></div></div><div class="lecture-stage-key"><span>F <small>取指</small></span><span>D <small>译码</small></span><span>E <small>执行</small></span><span>M <small>访存</small></span><span>W <small>写回</small></span></div><div class="lecture-legend"><span><i class="lecture-swatch"></i>已执行</span><span><i class="lecture-swatch current"></i>当前周期</span><span><i class="lecture-swatch bubble"></i>气泡</span><span class="lecture-held">D̲ 暂停</span><span class="lecture-canceled">清空</span><span class="lecture-forward-key">↳ 转发</span><span class="lecture-current"></span></div>`;
+    host.innerHTML = `<div class="lecture-scroll" tabindex="0" role="region" aria-label="流水线时序图，可滚动查看历史周期"><div class="lecture-canvas"><div class="lecture-axis-row"><svg class="lecture-axis-svg" aria-hidden="true"></svg><svg class="lecture-corner" aria-hidden="true"></svg></div><svg class="lecture-svg" role="img" aria-label="逐周期流水线动画"><title>单击方格推进一个周期</title><defs><marker id="timeline-arrowhead" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6" fill="none" stroke="#0f766e" stroke-width="1.5"/></marker></defs><rect class="lecture-background" width="100%" height="100%" rx="7"/><g class="lecture-grid"></g><g class="lecture-highlight"><rect x="0" y="7" rx="5"/></g><g class="lecture-forwards"></g></svg><svg class="lecture-labels" role="img" aria-label="指令列表"></svg></div></div><div class="lecture-stage-key"><span>F <small>取指</small></span><span>D <small>译码</small></span><span>E <small>执行</small></span><span>M <small>访存</small></span><span>W <small>写回</small></span></div><div class="lecture-legend"><span><i class="lecture-swatch"></i>已执行</span><span><i class="lecture-swatch current"></i>当前周期</span><span><i class="lecture-swatch bubble"></i>气泡</span><span class="lecture-held">D̲ 暂停</span><span class="lecture-canceled">清空</span><span class="lecture-forward-key">↳ 转发</span><span class="lecture-current"></span></div>`;
   }
   host.classList.toggle('animation-off', !animate);
   host.querySelector('.lecture-current').textContent = `第 ${model.cycle} 周期${model.terminal ? ' · 已停止' : ''}`;
@@ -134,8 +134,9 @@ export function renderTimeline(host, model, animate = true, options = {}) {
   labels.setAttribute('viewBox', `0 0 ${gridX} ${height}`);
   labels.style.width = `${gridX}px`; labels.style.height = `${height}px`;
   svg.setAttribute('aria-label', `指令与周期动画，第 ${model.cycle} 周期`);
-  let markup = '', labelMarkup = `<rect width="100%" height="100%" fill="#fff"/><path d="M${gridX - 1} 0 V${height}" stroke="#e1e8ec"/><text x="14" y="33" class="lecture-axis">指令 / 周期</text>`;
-  for (let cycle = model.firstCycle; cycle <= model.endCycle; cycle++) markup += `<text x="${x(cycle) + columnWidth / 2}" y="34" text-anchor="middle" class="lecture-cycle ${cycle === model.cycle ? 'selected' : cycle > model.cycle ? 'future' : ''}">${cycle}</text>`;
+  let markup = '', labelMarkup = `<rect width="100%" height="100%" fill="#fff"/><path d="M${gridX - 1} 0 V${height}" stroke="#e1e8ec"/>`;
+  let axisMarkup = `<rect width="100%" height="100%" fill="#fafcfd"/><path d="M0 ${gridY - 1} H${canvasWidth}" stroke="#e1e8ec"/>`;
+  for (let cycle = model.firstCycle; cycle <= model.endCycle; cycle++) axisMarkup += `<text x="${x(cycle) + columnWidth / 2}" y="34" text-anchor="middle" class="lecture-cycle ${cycle === model.cycle ? 'selected' : cycle > model.cycle ? 'future' : ''}">${cycle}</text>`;
   rows.forEach(row => {
     const display = row.label.length > labelLimit ? row.label.slice(0, labelLimit - 1) + '…' : row.label;
     const rowClass = `lecture-row ${row.canceled ? 'canceled' : ''} ${row.bubble ? 'bubble' : ''}`;
@@ -152,6 +153,11 @@ export function renderTimeline(host, model, animate = true, options = {}) {
     markup += `<path class="lecture-stall-turn" data-instruction="${escape(row.id)}" data-cycle="${turn.cell.cycle}" d="M${boundary - 7} ${y(turn.previous.lane) + rowHeight / 2} H${boundary} V${y(turn.cell.lane) + rowHeight / 2} h7"/>`;
   }
   host.querySelector('.lecture-grid').innerHTML = markup;
+  const axis = host.querySelector('.lecture-axis-svg'), corner = host.querySelector('.lecture-corner');
+  axis.setAttribute('viewBox', `0 0 ${canvasWidth} ${gridY}`); axis.style.width = `${canvasWidth}px`;
+  axis.innerHTML = axisMarkup;
+  corner.setAttribute('viewBox', `0 0 ${gridX} ${gridY}`); corner.style.width = `${gridX}px`;
+  corner.innerHTML = `<rect width="100%" height="100%" fill="#fafcfd"/><text x="14" y="34" class="lecture-axis">指令 / 周期</text><path d="M${gridX - 1} 0 V${gridY} H0" fill="none" stroke="#e1e8ec"/>`;
   labels.innerHTML = labelMarkup;
   const highlight = host.querySelector('.lecture-highlight');
   highlight.style.transform = `translateX(${x(model.cycle)}px)`;
@@ -170,7 +176,7 @@ export function renderTimeline(host, model, animate = true, options = {}) {
     if (activeLanes.length) {
       const bottom = y(Math.max(...activeLanes)) + rowHeight + 14;
       if (bottom > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = bottom - scroller.clientHeight;
-      else if (y(Math.min(...activeLanes)) < scroller.scrollTop) scroller.scrollTop = y(Math.min(...activeLanes));
+      else if (y(Math.min(...activeLanes)) < scroller.scrollTop + gridY) scroller.scrollTop = Math.max(0, y(Math.min(...activeLanes)) - gridY);
     }
   }
   host.dataset.cycle = String(model.cycle);

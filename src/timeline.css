@@ -11,8 +11,11 @@
 .lecture-current { color: #ac711a; background: #fff5df; border: 1px solid #f5dfb2; padding: 5px 10px; border-radius: 5px; font: 11px var(--mono); }
 .lecture-scroll { overflow: auto; max-height: 540px; border: 1px solid #e7edf0; border-radius: 7px; scrollbar-width: thin; scrollbar-color: #d8e1e6 transparent; }
 .lecture-canvas { position: relative; }
+.lecture-axis-row { position: sticky; top: 0; height: 54px; z-index: 3; pointer-events: none; font-family: var(--mono); }
+.lecture-axis-svg { position: absolute; left: 0; top: 0; height: 54px; }
+.lecture-corner { display: block; position: sticky; left: 0; height: 54px; }
 .lecture-svg { position: absolute; left: 0; top: 0; display: block; max-width: none; min-width: 100%; font-family: var(--mono); overflow: hidden; }
-.lecture-labels { display: block; position: sticky; left: 0; z-index: 2; font-family: var(--mono); filter: drop-shadow(3px 0 3px #233f4f08); }
+.lecture-labels { display: block; position: sticky; left: 0; z-index: 2; margin-top: -54px; font-family: var(--mono); filter: drop-shadow(3px 0 3px #233f4f08); }
 .lecture-background { fill: #fff; }
 .lecture-axis { font: 17px "Microsoft YaHei", system-ui, sans-serif; fill: #243e50; }
 .lecture-cycle { font-size: 18px; fill: #3f5970; }
