@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assemble, Pipeline, decode, readWord, writeWord, i64, OP, MEMORY_SIZE, AssemblyError } from '../src/core.js';
+import { assemble, Pipeline, decode, readWord, writeWord, i64, OP, MEMORY_SIZE, AssemblyError, FORWARD_PATHS } from '../src/core.js';
 import { EXAMPLES } from '../src/examples.js';
 
 // Independent instruction-at-a-time oracle: no pipeline/forwarding/ALU helpers.
@@ -40,8 +40,8 @@ function reference(program, limit = 10000) {
   return { regs, cc, memory, status };
 }
 
-function compare(source) {
-  const program = assemble(source), pipe = new Pipeline(program).run(), expected = reference(program);
+function compare(source, options) {
+  const program = assemble(source), pipe = new Pipeline(program, options).run(), expected = reference(program);
   assert.equal(pipe.status, expected.status, 'terminal status');
   assert.deepEqual(pipe.regs, expected.regs, 'register values');
   assert.deepEqual(pipe.cc, expected.cc, 'condition codes');
@@ -136,5 +136,44 @@ test('deterministic randomized dependencies match an independent ISA model', () 
       }
     }
     lines.push('halt'); compare(lines.join('\n'));
+    compare(lines.join('\n'), { forwarding: Object.fromEntries(FORWARD_PATHS.map((id, i) => [id, Boolean((trial % 32) & (1 << i))])) });
   }
+});
+
+
+test('all 32 forwarding configurations preserve the ISA results of all 19 examples', () => {
+  for (let mask = 0; mask < 32; mask++) {
+    const forwarding = Object.fromEntries(FORWARD_PATHS.map((id, i) => [id, Boolean(mask & (1 << i))]));
+    for (const example of EXAMPLES) compare(example.source, { forwarding });
+  }
+});
+
+test('disabled forwarding waits for the youngest writer and never takes an older value', () => {
+  const source = 'irmovq $1, %rax\nirmovq $2, %rax\nrrmovq %rax, %rbx\nhalt';
+  const pipe = compare(source, { forwarding: { E_valE: false, M_valE: false } });
+  assert.equal(pipe.regs[3], 2n);
+  assert.equal(pipe.stalls, 2);
+  assert(pipe.events.some(event => event.message.includes('E_valE')));
+  const allOff = compare(source, { forwarding: Object.fromEntries(FORWARD_PATHS.map(id => [id, false])) });
+  assert.equal(allOff.stalls, 3); // E, M, W; register file is read before the writeback edge.
+});
+
+test('misprediction flush beats a disabled-path dependency in the wrong-path D instruction', () => {
+  const program = assemble('irmovq $9, %rbx\nxorq %rax, %rax\njne wrong\nirmovq $1, %rax\nhalt\nwrong: rrmovq %rbx, %rdx\nhalt');
+  const pipe = new Pipeline(program, { forwarding: { W_valE: false } });
+  let observed = false;
+  while (pipe.status === 'AOK') {
+    const signals = pipe.evaluate();
+    if (signals.mispredict && signals.blocked.length) { observed = true; assert(!signals.D_stall); assert(signals.D_bubble); }
+    pipe.step();
+  }
+  assert(observed); assert.equal(pipe.regs[2], 0n); assert.equal(pipe.regs[0], 1n);
+});
+
+test('snapshots retain forwarding settings and replay extra dependency stalls', () => {
+  const pipe = new Pipeline(assemble(EXAMPLES[0].source), { forwarding: { E_valE: false, W_valE: false } });
+  for (let i = 0; i < 3; i++) pipe.step();
+  const saved = pipe.snapshot(); pipe.step(); const expected = pipe.snapshot();
+  pipe.forwarding.M_valE = false; pipe.restore(saved); pipe.step();
+  assert.deepEqual(pipe.snapshot(), expected);
 });

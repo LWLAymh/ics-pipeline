@@ -118,3 +118,13 @@ test('terminal frame includes halt at W, with no invented trailing zero-byte hal
   assert.equal(model.rows.filter(row => row.label.includes('halt')).length, 1);
   assert(currentCells(model).some(cell => cell.stage === 'W' && cell.label.includes('halt')));
 });
+
+
+test('disabled forwarding creates repeated D holds with one E bubble per wait cycle', () => {
+  const p = new Pipeline(assemble(EXAMPLES[0].source), { forwarding: { E_valE: false, M_valE: false, M_valM: false, W_valE: false, W_valM: false } }).run();
+  const model = buildTimeline(p.program, p);
+  assert(p.stalls > 0);
+  assert.equal(model.rows.filter(row => row.bubble && row.id.startsWith('bubble-E')).length, p.trace.filter(frame => frame.dataStall).length);
+  assert(model.rows.some(row => !row.bubble && row.cells.filter(cell => cell.stage === 'D' && cell.stalled).length >= 3));
+  assert.equal(p.regs[3], 22n);
+});

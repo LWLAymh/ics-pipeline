@@ -1,6 +1,7 @@
-import { assemble, Pipeline, REGISTERS, OP, NONE, hex, regName, readWord, MEMORY_SIZE, isTerminal } from './core.js';
+import { assemble, Pipeline, REGISTERS, OP, NONE, hex, regName, readWord, MEMORY_SIZE, isTerminal, FORWARD_PATHS } from './core.js';
 import { EXAMPLES } from './examples.js';
 import { buildTimeline, renderTimeline } from './timeline.js';
+import { CONNECTIONS, FORWARD_CONNECTIONS, forwardingState } from './connections.js';
 
 const $ = id => document.getElementById(id);
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -10,6 +11,8 @@ let simulator, program, history = [], running = false, timer = null, pulseTimer 
 let currentTab = 'registers', numberFormat = 'hex', memoryStart = 0x100, runUntil = 5000, compiledSource = '', selectedExample = EXAMPLES[0];
 let visualization = new URL(window.location.href).searchParams.get('view') === 'timeline' ? 'timeline' : 'datapath';
 let focusScroll = 0;
+const forwardingConfig = Object.fromEntries(FORWARD_PATHS.map(id => [id, true]));
+let selectedWire = 'forward-e', wireStates = new Map();
 const source = $('source');
 const valueText = value => numberFormat === 'dec' ? String(value) : hex(value, 16);
 const shortHex = value => { const text = hex(value); return text.length > 14 ? text.slice(0, 6) + '…' + text.slice(-5) : text; };
@@ -32,7 +35,7 @@ function compile() {
   stop(false);
   try {
     const next = assemble(source.value);
-    program = next; simulator = new Pipeline(next); history = []; dirty = false; compiledSource = source.value;
+    program = next; simulator = new Pipeline(next, { forwarding: forwardingConfig }); history = []; dirty = false; compiledSource = source.value;
     $('assembly-error').hidden = true; source.removeAttribute('aria-invalid');
     const objectCode = /^\s*0x[\da-f]+\s*:/im.test(source.value);
     $('file-type').textContent = objectCode ? '.yo' : '.ys'; $('export-button').textContent = objectCode ? '下载 .yo' : '下载 .ys';
@@ -49,7 +52,7 @@ function compile() {
 
 function reset() {
   if (!program) return;
-  stop(false); simulator = new Pipeline(program); history = []; render();
+  stop(false); simulator = new Pipeline(program, { forwarding: forwardingConfig }); history = []; render();
 }
 function remember() { history.push(simulator.snapshot()); if (history.length > 120) history.shift(); }
 function step() {
@@ -88,6 +91,7 @@ function render() {
   $('reset').disabled = dirty || simulator.cycle === 0;
   $('edit-state').textContent = dirty ? '有修改 · 请编译' : '已编译'; $('edit-state').className = 'small-muted' + (dirty ? ' dirty' : '');
   $('hazard-count').textContent = `${simulator.stalls} 暂停 · ${simulator.flushes} 预测失败`;
+  $('forwarding-summary').textContent = `${Object.values(forwardingConfig).filter(Boolean).length} / 5 条路径开启`;
   renderNotice(s);
   $('datapath-panel').hidden = visualization !== 'datapath';
   $('timeline-panel').hidden = visualization !== 'timeline';
@@ -111,6 +115,7 @@ function renderNotice(s) {
   else if (simulator.status === 'INS') { kind = 'error'; message = 'INS：取到了非法指令或寄存器编码。请检查跳转目标、.yo 内容，以及是否写坏了代码区。'; }
   else if (s.loadUse) { kind = 'stall'; message = `本周期 load/use：${regName(simulator.E.dstM)} 的加载结果尚未就绪。下个边沿保持 F、D，在 E 插入气泡。`; }
   else if (s.mispredict) { kind = 'flush'; message = '本周期分支预测失败：实际不跳转。下个边沿在 D、E 插入气泡，再从 M.valA 恢复顺序地址。'; }
+  else if (s.dataStall) { kind = 'stall'; message = `转发等待：${s.blocked.map(b => `${regName(b.reg)} 的 ${b.path.replace('_', '.')} 路径已关闭`).join('；')}。保持 F、D，在 E 插入气泡，等待最新结果。`; }
   else if (s.ret) { kind = 'stall'; message = '本周期遇到 ret：保持 F，并在 D 插入气泡，等待返回地址到达 W。'; }
   else if (s.forwards.length && simulator.D.stat === 'AOK') message = '本周期转发：' + s.forwards.map(f => `${f.from}，${regName(f.reg)} = ${shortHex(f.value)} → val${f.port}`).join('；');
   else if (simulator.cycle === 0) message = '程序已编译。点击「单步」，观察指令进入五级流水线。';
@@ -129,7 +134,12 @@ function renderDiagram(s) {
     const control = !live ? '' : controls[key];
     return `<div class="stage-header" style="--stage:${COLORS[key]}"><div class="stage-name"><span class="stage-letter">${key}</span>${name[0]} <span class="stage-subtitle">${name[1]}</span>${control ? `<span class="stage-control ${control === 'BUBBLE' ? 'bubble' : ''}" title="下一个时钟边沿将执行 ${control}">${control}</span>` : ''}</div><div class="stage-instruction ${isBubble ? 'empty' : ''}" title="${escape(stage.text)}">${escape(text)}</div><div class="stage-pc">${isBubble ? 'PC —' : `PC ${hex(stage.pc, 4)}`}<span class="source-line">${isBubble || !line ? '' : `L${line}`}</span></div></div>`;
   }).join('');
-  const wire = (id, d, enabled, color, description, extra = '') => `<g>${tooltip(description)}<path id="${id}" class="wire ${extra} ${enabled ? 'active' : ''}" style="--wire-color:${color}" d="${d}"/><path class="wire-hit" d="${d}"/></g>`;
+  wireStates = new Map();
+  const wire = (id, d, enabled, color, description, extra = '') => {
+    const definition = CONNECTIONS[id], disabled = definition.path && !sim.forwarding[definition.path];
+    wireStates.set(id, { active: Boolean(enabled), description });
+    return `<g class="wire-group ${selectedWire === id ? 'selected' : ''} ${disabled ? 'disabled' : ''}" data-wire="${id}" role="button" tabindex="0" aria-label="查看${escape(definition.title)}连线">${tooltip(definition.title + '：' + description)}<path id="${id}" class="wire ${extra} ${enabled ? 'active' : ''}" style="--wire-color:${color}" d="${d}"/><path class="wire-hit" d="${d}"/></g>`;
+  };
   const label = (x, y, text, cls = 'wire-label', anchor = '') => `<text x="${x}" y="${y}" class="${cls}" ${anchor ? `text-anchor="${anchor}"` : ''}>${escape(text)}</text>`;
   const numeric = (x, y, value, prefix = '') => `<text x="${x}" y="${y}" class="component-value">${tooltip(`${prefix}${hex(value, 16)} / ${value}`)}${escape(shortHex(value))}</text>`;
   const component = (key, x, y, w, h, title, lines = []) => `<g class="tap-target" style="--stage:${COLORS[key]}">${tooltip(title)}<rect class="component ${active(key) ? 'active' : ''}" x="${x}" y="${y}" width="${w}" height="${h}" rx="6"/>${label(x + w / 2, y + 23, title, 'component-label', 'middle')}${lines.map((line, i) => label(x + w / 2, y + 44 + i * 19, line, 'component-value', 'middle')).join('')}</g>`;
@@ -138,7 +148,7 @@ function renderDiagram(s) {
   const forwarding = prefix => live && sim.D.stat === 'AOK' && s.forwards.some(f => f.from.startsWith(prefix));
   const codeA = active('D'), codeE = active('E'), codeM = active('M'), codeW = active('W');
   const svg = `<svg viewBox="0 0 1440 450" role="img" aria-labelledby="datapath-title datapath-desc"><title id="datapath-title">Y86-64 PIPE 数据通路</title><desc id="datapath-desc">五级流水线含取指、译码、执行、访存和双端口写回。彩色连线显示当前有效信号；底部紫色连线表示数据转发。</desc>
-    <defs><pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".65" class="diagram-dot"/></pattern></defs><rect x="0" y="0" width="1440" height="450" fill="url(#dots)"/>
+    <defs><marker id="signal-start" markerWidth="6" markerHeight="6" refX="3" refY="3"><circle cx="3" cy="3" r="2" fill="#197d86"/></marker><marker id="signal-end" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z" fill="#197d86"/></marker><pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".65" class="diagram-dot"/></pattern></defs><rect x="0" y="0" width="1440" height="450" fill="url(#dots)"/>
     ${[256,576,856,1136].map(x => `<path class="stage-separator" d="M${x} 12 V432"/>`).join('')}
     ${wire('pc-prediction', 'M221 80 H235 V22 H10 V80 H34', active('F') && s.pcReason === '预测 PC', COLORS.F, `F.predPC = ${hex(sim.F.predPC)}；${[OP.JUMP,OP.CALL].includes(f.icode) ? '预测目标地址' : '顺序地址 valP'}`)}
     ${wire('pc-branch', 'M867 284 H879 V38 H22 V92 H34', live && s.pcReason === '分支纠正', '#bc6d83', `分支预测失败时 f_pc = M.valA = ${hex(sim.M.valA)}`, 'control')}
@@ -152,8 +162,8 @@ function renderDiagram(s) {
     ${wire('decode-valc', 'M267 311 H565', codeA && [OP.IMM,OP.LOAD,OP.STORE,OP.IADD].includes(sim.D.icode), COLORS.D, `D.valC = ${hex(sim.D.valC)}`)}
     ${wire('register-a', 'M482 182 H502', codeA && s.srcA !== NONE, COLORS.D, `R[${regName(s.srcA)}] = ${hex(sim.regs[s.srcA] ?? 0n)}`)}
     ${wire('register-b', 'M482 230 H502', codeA && s.srcB !== NONE, COLORS.D, `R[${regName(s.srcB)}] = ${hex(sim.regs[s.srcB] ?? 0n)}`)}
-    ${wire('decode-a', 'M540 182 H565', codeA && s.srcA !== NONE, COLORS.D, `d_valA = ${hex(s.d_valA)}；${s.forwards.find(f=>f.port==='A')?.from || '寄存器文件'}`)}
-    ${wire('decode-b', 'M540 230 H565', codeA && s.srcB !== NONE, COLORS.D, `d_valB = ${hex(s.d_valB)}；${s.forwards.find(f=>f.port==='B')?.from || '寄存器文件'}`)}
+    ${wire('decode-a', 'M540 182 H565', codeA && s.srcA !== NONE && !s.E_bubble, COLORS.D, s.blocked.some(b=>b.port==='A') ? 'd_valA：等待最新结果，本周期不锁存' : `d_valA = ${hex(s.d_valA)}；${s.forwards.find(f=>f.port==='A')?.from || '寄存器文件'}`)}
+    ${wire('decode-b', 'M540 230 H565', codeA && s.srcB !== NONE && !s.E_bubble, COLORS.D, s.blocked.some(b=>b.port==='B') ? 'd_valB：等待最新结果，本周期不锁存' : `d_valB = ${hex(s.d_valB)}；${s.forwards.find(f=>f.port==='B')?.from || '寄存器文件'}`)}
     ${wire('alu-a-register', 'M587 182 H639', codeE && [OP.MOV,OP.ALU].includes(sim.E.icode), COLORS.E, `E.valA = ${hex(sim.E.valA)}`)}
     ${wire('alu-a-immediate', 'M587 311 H614 V198 H639', codeE && [OP.IMM,OP.LOAD,OP.STORE,OP.IADD].includes(sim.E.icode), COLORS.E, `E.valC = ${hex(sim.E.valC)}`)}
     ${wire('alu-a', 'M673 177 H720', codeE, COLORS.E, `aluA = ${hex(s.aluA)}`)}
@@ -175,7 +185,9 @@ function renderDiagram(s) {
     ${wire('forward-e', 'M811 202 V356 H520 V258', forwarding('E'), '#9971ce', s.forwards.filter(f=>f.from.startsWith('E')).map(f=>`${f.from} ${regName(f.reg)}=${hex(f.value)} → val${f.port}`).join('；') || '执行结果转发：e_valE → D', 'forward')}
     ${wire('forward-m', 'M1082 229 V372 H530 V258', forwarding('M (valM)'), '#9971ce', s.forwards.filter(f=>f.from.startsWith('M (valM)')).map(f=>`${f.from} ${regName(f.reg)}=${hex(f.value)} → val${f.port}`).join('；') || '内存读取结果转发：m_valM → D', 'forward')}
     ${wire('forward-m-e', 'M1094 147 V365 H540 V258', forwarding('M (valE)'), '#9971ce', s.forwards.filter(f=>f.from.startsWith('M (valE)')).map(f=>`${f.from} ${regName(f.reg)}=${hex(f.value)} → val${f.port}`).join('；') || '访存级 ALU 结果转发：M.valE → D', 'forward')}
-    ${wire('forward-w', 'M1356 265 V389 H508 V258', forwarding('W'), '#9971ce', s.forwards.filter(f=>f.from.startsWith('W')).map(f=>`${f.from} ${regName(f.reg)}=${hex(f.value)} → val${f.port}`).join('；') || '写回级结果转发：W.valE / W.valM → D', 'forward')}
+    ${wire('forward-w-e', 'M1203 180 V398 H508 V258', live && s.forwards.some(f=>f.path==='W_valE'), '#9971ce', '写回级 ALU 结果：W.valE = '+hex(sim.W.valE,16)+' → D', 'forward')}
+    ${wire('forward-w-m', 'M1209 229 V405 H514 V258', live && s.forwards.some(f=>f.path==='W_valM'), '#9971ce', '写回级加载结果：W.valM = '+hex(sim.W.valM,16)+' → D', 'forward')}
+    ${[[811,202,'E_valE'],[1082,229,'M_valM'],[1094,147,'M_valE'],[1203,180,'W_valE'],[1209,229,'W_valM']].map(([x,y,path])=>`<circle class="wire-junction ${sim.forwarding[path]?'':'disabled'}" cx="${x}" cy="${y}" r="2.8"/>`).join('')}
     ${pipelineReg(245,'F / D','D')}${pipelineReg(565,'D / E','E')}${pipelineReg(845,'E / M','M')}${pipelineReg(1125,'M / W','W')}
     <path class="mux ${live ? 'active' : ''}" d="M34 58 L70 70 V104 L34 117 Z"/>${label(49,91,'PC','mux-label')}
     ${component('F',27,163,66,48,'PC')}${numeric(35,200,s.f_pc)}
@@ -200,11 +212,28 @@ function renderDiagram(s) {
     ${label(100,178,'f_pc')}${label(157,130,'icode · ifun · rA · rB')}${label(358,128,'15 × 64-bit')}
     ${label(644,137,'valA / valC / ±8')}${label(645,294,'valB / 0')}${label(787,222,'e_valE')}
     ${label(953,158,'address')}${label(936,290,s.m_stat==='ADR'?'ADR · 地址越界':s.memoryRead?`valM ${shortHex(s.m_valM)}`:s.memoryWrite?`data ${shortHex(sim.M.valA)}`:'读 / 写使能')}
-    ${label(683,365,'E → D','forward-caption')}${label(928,381,'M → D','forward-caption')}${label(1185,398,'W → D','forward-caption')}
+    ${label(683,365,'E → D','forward-caption')}${label(928,381,'M → D','forward-caption')}${label(1185,389,'W.valE / W.valM → D','forward-caption')}
     ${label(858,442,'WRITE BACK → REGISTER FILE','caption-svg','middle')}
   </svg>`;
   $('datapath').innerHTML = `<div class="stage-header-row">${cards}</div>${svg}`;
+  $('datapath').classList.toggle('isolate-signal', $('isolate-signal').checked);
   $('datapath').classList.toggle('flow', $('animate').checked && (running || Boolean(pulseTimer)));
+  renderSignalDetail(s);
+}
+
+function renderSignalDetail(s) {
+  const def = CONNECTIONS[selectedWire], state = wireStates.get(selectedWire);
+  $('signal-select').value = selectedWire;
+  const info = def.path ? forwardingState(def.path, simulator, s) : null;
+  const inactive = dirty || simulator.status !== 'AOK';
+  const status = dirty ? '代码待编译' : inactive ? '处理器已停止' : info?.state || (state.active ? '本周期有效' : '本周期未使用');
+  const currentValue = info ? info.dst === NONE || simulator[FORWARD_CONNECTIONS[def.path].stage].stat !== 'AOK' ? '当前级无有效的寄存器写入目标' : `候选值 ${hex(info.value,16)} / ${info.value} · 目标 ${regName(info.dst)}` : state.description;
+  $('signal-detail').innerHTML = `<div class="signal-route"><div><span>起点 · ${def.width}</span><strong>${escape(def.from)}</strong></div><b aria-hidden="true">→</b><div><span>终点</span><strong>${escape(def.to)}</strong></div><span class="signal-status">${status}</span></div><p class="signal-rule">${escape(def.rule)}</p><div class="signal-value"><code>${escape(currentValue)}</code>${def.path ? `<button id="toggle-inspected-path" class="mini-button" data-path="${def.path}">${simulator.forwarding[def.path] ? '关闭此转发' : '开启此转发'}</button>` : ''}</div>`;
+  $('operand-sources').innerHTML = `<span class="operand-heading">D 级当前操作数</span>${['A','B'].map(port=>{
+    const operand = s.operands.find(op=>op.port===port);
+    const text = !operand || simulator.D.stat!=='AOK' ? (port==='A' && [OP.CALL,OP.JUMP].includes(simulator.D.icode) && simulator.D.stat==='AOK' ? 'D.valP（顺序地址）' : '不读取寄存器') : `${regName(operand.reg)} ← ${operand.from}${operand.waiting ? ' · 等待，当前不锁存' : ' · '+shortHex(operand.value)}`;
+    return `<span class="operand-chip ${operand?.waiting?'waiting':''}"><b>val${port}</b> ${escape(text)}</span>`;
+  }).join('')}`;
 }
 
 function renderState(s) {
@@ -231,7 +260,7 @@ function renderTiming() {
   const frames = simulator.trace.slice(-40), rows = new Map();
   if (!frames.length) { $('state-content').innerHTML = '<div class="empty-state"><span class="empty-symbol">F → D → E → M → W</span>先单步几次，在这里观察指令的重叠执行。</div>'; return; }
   for (const frame of frames) for (const [stage,inst] of Object.entries(frame.stages)) {
-    if (!inst.uid || inst.stat==='BUB' || (stage==='F' && frame.ret && !frame.loadUse)) continue;
+    if (!inst.uid || inst.stat==='BUB' || (stage==='F' && frame.ret && !frame.dataStall)) continue;
     if (!rows.has(inst.uid)) rows.set(inst.uid,{ inst, cells:new Map(), killed:false });
     const row=rows.get(inst.uid); row.cells.set(frame.cycle,{stage,hold:(stage==='F'&&frame.F_stall)||(stage==='D'&&frame.D_stall)});
     if(frame.mispredict&&(stage==='D'||stage==='F')) row.killed=true;
@@ -277,6 +306,28 @@ function loadExample(id) {
 }
 for (const id of ['examples', 'quick-example']) { $(id).innerHTML = exampleOptions; $(id).addEventListener('change', event=>loadExample(event.target.value)); }
 $('compile').addEventListener('click',compile);$('step').addEventListener('click',step);$('run').addEventListener('click',toggleRun);$('back').addEventListener('click',back);$('reset').addEventListener('click',reset);
+$('forwarding-paths').innerHTML = FORWARD_PATHS.map(path=>`<label><input type="checkbox" data-forward="${path}" checked><span>${FORWARD_CONNECTIONS[path].label}</span></label>`).join('');
+function applyForwarding(changes) {
+  Object.assign(forwardingConfig, changes);
+  document.querySelectorAll('[data-forward]').forEach(input=>{input.checked=forwardingConfig[input.dataset.forward];});
+  reset(); toast('转发配置已应用，程序已复位。');
+}
+$('forwarding-paths').addEventListener('change',event=>{const path=event.target.dataset.forward;if(path)applyForwarding({[path]:event.target.checked});});
+$('forward-all').addEventListener('click',()=>applyForwarding(Object.fromEntries(FORWARD_PATHS.map(path=>[path,true]))));
+$('forward-none').addEventListener('click',()=>applyForwarding(Object.fromEntries(FORWARD_PATHS.map(path=>[path,false]))));
+$('signal-select').innerHTML = Object.entries(CONNECTIONS).map(([id,def])=>`<option value="${id}">${escape(def.title)}</option>`).join('');
+$('signal-select').value = selectedWire;
+$('signal-select').addEventListener('change',event=>{stop(false);selectedWire=event.target.value;render();});
+$('isolate-signal').addEventListener('change',()=>{$('datapath').classList.toggle('isolate-signal',$('isolate-signal').checked);});
+$('signal-detail').addEventListener('click',event=>{const path=event.target.closest('[data-path]')?.dataset.path;if(path)applyForwarding({[path]:!forwardingConfig[path]});});
+function inspectWire(event) {
+  const wire = event.target.closest('[data-wire]'); if(!wire)return;
+  event.preventDefault();event.stopPropagation();stop(false);selectedWire=wire.dataset.wire;render();
+  $('signal-select').focus({preventScroll:true});
+  $('signal-inspector').scrollIntoView({block:'nearest',behavior:'smooth'});
+}
+$('datapath').addEventListener('click',inspectWire);
+$('datapath').addEventListener('keydown',event=>{if(['Enter',' '].includes(event.key))inspectWire(event);});
 function selectVisualization(view) {
   visualization = view;
   document.querySelectorAll('[data-view]').forEach(button => { const selected = button.dataset.view === view; button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1; });

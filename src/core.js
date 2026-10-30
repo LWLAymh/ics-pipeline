@@ -205,8 +205,11 @@ export function disassemble(s) {
 
 export const bubble = () => ({ stat: 'BUB', icode: OP.NOP, ifun: 0, rA: NONE, rB: NONE, srcA: NONE, srcB: NONE, dstE: NONE, dstM: NONE, valC: 0n, valP: 0n, valA: 0n, valB: 0n, valE: 0n, valM: 0n, Cnd: false, pc: 0n, uid: 0, text: 'bubble' });
 
+export const FORWARD_PATHS = ['E_valE', 'M_valM', 'M_valE', 'W_valM', 'W_valE'];
+
 export class Pipeline {
-  constructor(program) {
+  constructor(program, options = {}) {
+    this.forwarding = Object.fromEntries(FORWARD_PATHS.map(id => [id, options.forwarding?.[id] !== false]));
     this.program = program; this.memory = program.memory.slice(); this.regs = Array(15).fill(0n);
     this.cc = { ZF: true, SF: false, OF: false }; this.F = { predPC: 0n };
     this.D = bubble(); this.E = bubble(); this.M = bubble(); this.W = bubble();
@@ -243,26 +246,38 @@ export class Pipeline {
     const srcB = [OP.ALU, OP.STORE, OP.LOAD, OP.IADD].includes(D.icode) ? D.rB : [OP.PUSH, OP.POP, OP.CALL, OP.RET].includes(D.icode) ? RSP : NONE;
     const dstE = [OP.MOV, OP.IMM, OP.ALU, OP.IADD].includes(D.icode) ? D.rB : [OP.PUSH, OP.POP, OP.CALL, OP.RET].includes(D.icode) ? RSP : NONE;
     const dstM = [OP.LOAD, OP.POP].includes(D.icode) ? D.rA : NONE;
-    const forwards = [];
+    const forwards = [], blocked = [], operands = [];
     const resolve = (reg, port) => {
       if (reg === NONE) return 0n;
-      const candidates = [[e_dstE, execution.result, 'E → D', E], [M.dstM, m_valM, 'M (valM) → D', M], [M.dstE, M.valE, 'M (valE) → D', M], [W.dstM, W.valM, 'W (valM) → D', W], [W.dstE, W.valE, 'W (valE) → D', W]];
-      for (const [target, value, from, stage] of candidates) if (target === reg && stage.stat === 'AOK') { forwards.push({ from, port, reg, value }); return value; }
+      // The youngest writer wins even when its path is disabled. In particular,
+      // popq %rsp produces dstM after dstE; its stack increment is not the value to read.
+      const candidates = [[E.dstM, 0n, 'E (待加载)', E, null], [e_dstE, execution.result, 'E → D', E, 'E_valE'], [M.dstM, m_valM, 'M (valM) → D', M, 'M_valM'], [M.dstE, M.valE, 'M (valE) → D', M, 'M_valE'], [W.dstM, W.valM, 'W (valM) → D', W, 'W_valM'], [W.dstE, W.valE, 'W (valE) → D', W, 'W_valE']];
+      for (const [target, value, from, stage, path] of candidates) if (target === reg && stage.stat === 'AOK') {
+        const waiting = !path || !this.forwarding[path];
+        const operand = { from, port, reg, value, path, waiting };
+        operands.push(operand);
+        if (waiting) { blocked.push({ ...operand, reason: path ? 'disabled' : 'load' }); return this.regs[reg]; }
+        forwards.push(operand); return value;
+      }
+      operands.push({ from: '寄存器文件', port, reg, value: this.regs[reg], path: null, waiting: false });
       return this.regs[reg];
     };
     const d_valA = [OP.CALL, OP.JUMP].includes(D.icode) ? D.valP : resolve(srcA, 'A');
     const d_valB = resolve(srcB, 'B');
-    const loadUse = E.stat === 'AOK' && [OP.LOAD, OP.POP].includes(E.icode) && E.dstM !== NONE && [srcA, srcB].includes(E.dstM);
+    const loadUse = D.stat === 'AOK' && E.stat === 'AOK' && [OP.LOAD, OP.POP].includes(E.icode) && E.dstM !== NONE && [srcA, srcB].includes(E.dstM);
     const ret = [D, E, M].some(s => s.stat === 'AOK' && s.icode === OP.RET);
     const mispredict = E.stat === 'AOK' && E.icode === OP.JUMP && !e_Cnd;
-    const F_stall = loadUse || ret, D_stall = loadUse, D_bubble = mispredict || (!loadUse && ret), E_bubble = mispredict || loadUse;
+    // A mispredicted branch must flush its younger D instruction, even if that
+    // instruction also depends on an older writer with forwarding disabled.
+    const dataStall = !mispredict && D.stat === 'AOK' && blocked.length > 0;
+    const F_stall = dataStall || ret, D_stall = dataStall, D_bubble = mispredict || (!dataStall && ret), E_bubble = mispredict || dataStall;
     const M_bubble = isTerminal(m_stat) || isTerminal(W.stat), W_stall = isTerminal(W.stat);
     const correction = M.stat === 'AOK' && M.icode === OP.JUMP && !M.Cnd;
     const returnPC = W.stat === 'AOK' && W.icode === OP.RET;
     const f_pc = correction ? M.valA : returnPC ? W.valM : this.F.predPC;
     const fetched = decode(this.memory, f_pc);
     const f_predPC = [OP.JUMP, OP.CALL].includes(fetched.icode) ? fetched.valC : fetched.valP;
-    return { writeback, m_stat, m_valM, memoryRead, memoryWrite, memoryAddress, aluA, aluB, aluFunction, e_valE: execution.result, e_Cnd, e_dstE, setCC, newCC: execution.cc, srcA, srcB, dstE, dstM, d_valA, d_valB, forwards, loadUse, ret, mispredict, F_stall, D_stall, D_bubble, E_bubble, M_bubble, W_stall, f_pc, f_predPC, fetched, pcReason: correction ? '分支纠正' : returnPC ? 'ret 返回地址' : '预测 PC' };
+    return { writeback, m_stat, m_valM, memoryRead, memoryWrite, memoryAddress, aluA, aluB, aluFunction, e_valE: execution.result, e_Cnd, e_dstE, setCC, newCC: execution.cc, srcA, srcB, dstE, dstM, d_valA, d_valB, forwards, operands, blocked, dataStall, loadUse, ret, mispredict, F_stall, D_stall, D_bubble, E_bubble, M_bubble, W_stall, f_pc, f_predPC, fetched, pcReason: correction ? '分支纠正' : returnPC ? 'ret 返回地址' : '预测 PC' };
   }
   step() {
     if (this.status !== 'AOK') return false;
@@ -284,25 +299,26 @@ export class Pipeline {
     if (!s.F_stall) this.F = { predPC: s.f_predPC };
     this.D = nextD; this.E = nextE; this.M = nextM; this.W = nextW; this.cycle++;
     this.last = { ...s, old, fetched };
-    if (s.loadUse || s.ret) this.stalls++;
+    if (s.dataStall || s.ret) this.stalls++;
     if (s.mispredict) this.flushes++;
     const events = [];
     if (s.loadUse) events.push({ type: 'stall', message: `load/use：${regName(old.E.dstM)} 尚在访存途中；保持 F、D，在 E 插入气泡。` });
+    if (s.dataStall && !s.loadUse) events.push({ type: 'stall', message: `转发路径关闭：${s.blocked.map(b => `${regName(b.reg)} 等待 ${b.path}`).join('；')}。保持 F、D，在 E 插入气泡，等待可用转发或写回。` });
     if (s.mispredict) events.push({ type: 'flush', message: '分支预测失败：预测跳转，实际不跳转；清空 D、E，下一周期纠正 PC。' });
-    if (s.ret && !s.loadUse) events.push({ type: 'stall', message: 'ret：暂停取指，等待返回地址从内存到达 W。' });
+    if (s.ret && !s.dataStall) events.push({ type: 'stall', message: 'ret：暂停取指，等待返回地址从内存到达 W。' });
     if (s.forwards.length && old.D.stat === 'AOK' && !s.E_bubble) events.push({ type: 'forward', message: s.forwards.map(f => `${f.from}：${regName(f.reg)} = ${hex(f.value)} → val${f.port}`).join('；') });
     if (s.memoryRead) events.push({ type: 'memory', message: `读取 M[${hex(s.memoryAddress)}] = ${hex(s.m_valM)}` });
     if (s.memoryWrite) events.push({ type: 'memory', message: `写入 M[${hex(s.memoryAddress)}] = ${hex(old.M.valA)}` });
     this.events.unshift(...events.map(event => ({ ...event, cycle: this.cycle })));
     this.events.length = Math.min(this.events.length, 160);
-    this.trace.push({ cycle: this.cycle, stages: { F: fetched, D: old.D, E: old.E, M: old.M, W: old.W }, loadUse: s.loadUse, ret: s.ret, mispredict: s.mispredict, F_stall: s.F_stall, D_stall: s.D_stall, D_bubble: s.D_bubble });
+    this.trace.push({ cycle: this.cycle, stages: { F: fetched, D: old.D, E: old.E, M: old.M, W: old.W }, loadUse: s.loadUse, dataStall: s.dataStall, ret: s.ret, mispredict: s.mispredict, F_stall: s.F_stall, D_stall: s.D_stall, D_bubble: s.D_bubble });
     if (this.trace.length > 500) this.trace.shift();
     if (isTerminal(this.W.stat)) { this.status = this.W.stat; if (this.W.stat === 'HLT') this.retired++; }
     return true;
   }
   run(limit = 10000) { while (this.status === 'AOK' && this.cycle < limit) this.step(); return this; }
   snapshot() {
-    return { memory: this.memory.slice(), regs: [...this.regs], cc: { ...this.cc }, F: { ...this.F }, D: { ...this.D }, E: { ...this.E }, M: { ...this.M }, W: { ...this.W }, cycle: this.cycle, retired: this.retired, status: this.status, nextUid: this.nextUid, stalls: this.stalls, flushes: this.flushes, events: [...this.events], trace: [...this.trace], last: this.last, changedRegs: [...this.changedRegs], changedMemory: [...this.changedMemory] };
+    return { forwarding: { ...this.forwarding }, memory: this.memory.slice(), regs: [...this.regs], cc: { ...this.cc }, F: { ...this.F }, D: { ...this.D }, E: { ...this.E }, M: { ...this.M }, W: { ...this.W }, cycle: this.cycle, retired: this.retired, status: this.status, nextUid: this.nextUid, stalls: this.stalls, flushes: this.flushes, events: [...this.events], trace: [...this.trace], last: this.last, changedRegs: [...this.changedRegs], changedMemory: [...this.changedMemory] };
   }
-  restore(state) { Object.assign(this, state, { memory: state.memory.slice(), regs: [...state.regs], cc: { ...state.cc }, F: { ...state.F }, D: { ...state.D }, E: { ...state.E }, M: { ...state.M }, W: { ...state.W }, events: [...state.events], trace: [...state.trace] }); }
+  restore(state) { Object.assign(this, state, { forwarding: { ...state.forwarding }, memory: state.memory.slice(), regs: [...state.regs], cc: { ...state.cc }, F: { ...state.F }, D: { ...state.D }, E: { ...state.E }, M: { ...state.M }, W: { ...state.W }, events: [...state.events], trace: [...state.trace] }); }
 }

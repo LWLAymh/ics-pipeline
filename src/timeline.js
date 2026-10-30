@@ -17,6 +17,7 @@ export function buildTimeline(program, simulator) {
       D: simulator.D, E: simulator.E, M: simulator.M, W: simulator.W,
     },
     loadUse: !terminal && signals.loadUse,
+    dataStall: !terminal && signals.dataStall,
     ret: !terminal && signals.ret,
     mispredict: !terminal && signals.mispredict,
     D_bubble: !terminal && signals.D_bubble,
@@ -36,7 +37,7 @@ export function buildTimeline(program, simulator) {
 
   for (const frame of frames) {
     for (const [stage, inst] of Object.entries(frame.stages)) {
-      if (!visible(inst) || (stage === 'F' && frame.ret && !frame.loadUse)) continue;
+      if (!visible(inst) || (stage === 'F' && frame.ret && !frame.dataStall)) continue;
       observedPCs.add(Number(inst.pc));
       if (!rows.has(inst.uid)) rows.set(inst.uid, { id: inst.uid, order: inst.uid, label: label(inst), cells: [], canceled: false, bubble: false });
       const row = rows.get(inst.uid);
@@ -52,14 +53,14 @@ export function buildTimeline(program, simulator) {
   for (const frame of frames) {
     if (frame.cycle >= cycle) continue;
     for (const startStage of ['D', 'E']) {
-      if (!(startStage === 'D' ? frame.D_bubble : frame.loadUse || frame.mispredict)) continue;
+      if (!(startStage === 'D' ? frame.D_bubble : frame.dataStall || frame.mispredict)) continue;
       const target = startStage === 'E' ? frame.stages.D : frame.stages.F;
       const retStage = ['M', 'E', 'D'].find(stage => frame.stages[stage]?.icode === 9 && frame.stages[stage].stat === 'AOK');
       const retInstruction = frame.stages[retStage];
-      const order = frame.ret && startStage === 'D' ? (retInstruction?.uid || target?.uid || 0) + .1 + .01 * ORDER.indexOf(retStage) : (target?.uid || 0) + (frame.loadUse ? -.1 : .1);
+      const order = frame.ret && startStage === 'D' ? (retInstruction?.uid || target?.uid || 0) + .1 + .01 * ORDER.indexOf(retStage) : (target?.uid || 0) + (frame.dataStall ? -.1 : .1);
       const row = { id: `bubble-${startStage}-${frame.cycle}`, order, label: 'bubble', cells: [], canceled: false, bubble: true };
       const start = ORDER.indexOf(startStage);
-      if (startStage === 'D' && frame.ret && !frame.loadUse) row.cells.push({ cycle: frame.cycle, stage: '停', stalled: true });
+      if (startStage === 'D' && frame.ret && !frame.dataStall) row.cells.push({ cycle: frame.cycle, stage: '停', stalled: true });
       for (let index = start; index < ORDER.length; index++) {
         const at = frame.cycle + 1 + index - start;
         if (at > cycle) break;
