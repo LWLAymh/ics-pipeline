@@ -100,9 +100,17 @@ export function layoutTimelineRows(rows, cycle) {
   });
 }
 
+/** Keep room for instruction labels without pushing the grid outside small screens. */
+export function timelineGeometry(viewport, scale = 1) {
+  const zoom = [0.8, 1, 1.2].includes(Number(scale)) ? Number(scale) : 1;
+  const gridX = Math.min(375, Math.max(140, Math.round(viewport * .34)));
+  return { gridX, gridY: 54, columnWidth: 54 * zoom, rowHeight: 39 * zoom, zoom,
+    labelSize: gridX < 220 ? 11 : 15, labelLimit: Math.floor((gridX - 24) / (gridX < 220 ? 6.6 : 9)) };
+}
+
 /** Keep the highlight group mounted between edges for a smooth column slide. */
-export function renderTimeline(host, model, animate = true) {
-  const gridX = 375, gridY = 54, columnWidth = 54, rowHeight = 39;
+export function renderTimeline(host, model, animate = true, options = {}) {
+  const { gridX, gridY, columnWidth, rowHeight, zoom, labelSize, labelLimit } = timelineGeometry(host.clientWidth, options.scale);
   const width = gridX + (model.endCycle - model.firstCycle + 1) * columnWidth + 16;
   const height = gridY + Math.max(model.rows.length, 5) * rowHeight + 17;
   const x = cycle => gridX + (cycle - model.firstCycle) * columnWidth;
@@ -110,24 +118,32 @@ export function renderTimeline(host, model, animate = true) {
   const rows = layoutTimelineRows(model.rows, model.cycle);
   const rowIndex = new Map(rows.map(row => [row.id, row.lane]));
   if (!host.querySelector('.lecture-scroll')) {
-    host.innerHTML = `<div class="lecture-topline"><span class="lecture-kicker">指令 × 周期</span><span class="lecture-current"></span></div><div class="lecture-scroll"><svg class="lecture-svg" role="img" aria-label="逐周期流水线动画"><title>单击图表推进一个周期</title><defs><marker id="timeline-arrowhead" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6" fill="none" stroke="#0f766e" stroke-width="1.5"/></marker></defs><rect class="lecture-background" width="100%" height="100%" rx="7"/><g class="lecture-grid"></g><g class="lecture-highlight"><rect x="0" y="7" width="${columnWidth}" rx="5"/></g><g class="lecture-forwards"></g></svg></div><div class="lecture-legend"><span><i class="lecture-swatch"></i>已执行</span><span><i class="lecture-swatch current"></i>当前周期</span><span><i class="lecture-swatch bubble"></i>气泡</span><span class="lecture-held">D̲ 暂停</span><span class="lecture-canceled">清空</span><span class="lecture-forward-key">↳ 转发</span></div>`;
+    host.innerHTML = `<div class="lecture-scroll" tabindex="0" role="region" aria-label="流水线时序图，可滚动查看历史周期"><div class="lecture-canvas"><svg class="lecture-svg" role="img" aria-label="逐周期流水线动画"><title>单击方格推进一个周期</title><defs><marker id="timeline-arrowhead" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6" fill="none" stroke="#0f766e" stroke-width="1.5"/></marker></defs><rect class="lecture-background" width="100%" height="100%" rx="7"/><g class="lecture-grid"></g><g class="lecture-highlight"><rect x="0" y="7" rx="5"/></g><g class="lecture-forwards"></g></svg><svg class="lecture-labels" role="img" aria-label="指令列表"></svg></div></div><div class="lecture-stage-key"><span>F <small>取指</small></span><span>D <small>译码</small></span><span>E <small>执行</small></span><span>M <small>访存</small></span><span>W <small>写回</small></span></div><div class="lecture-legend"><span><i class="lecture-swatch"></i>已执行</span><span><i class="lecture-swatch current"></i>当前周期</span><span><i class="lecture-swatch bubble"></i>气泡</span><span class="lecture-held">D̲ 暂停</span><span class="lecture-canceled">清空</span><span class="lecture-forward-key">↳ 转发</span><span class="lecture-current"></span></div>`;
   }
   host.classList.toggle('animation-off', !animate);
   host.querySelector('.lecture-current').textContent = `第 ${model.cycle} 周期${model.terminal ? ' · 已停止' : ''}`;
-  const svg = host.querySelector('svg');
+  host.style.setProperty('--timeline-scale', zoom);
+  const svg = host.querySelector('.lecture-svg');
   const canvasWidth = Math.max(width, host.querySelector('.lecture-scroll').clientWidth);
   svg.setAttribute('viewBox', `0 0 ${canvasWidth} ${height}`);
   svg.style.width = `${canvasWidth}px`;
   svg.style.height = `${height}px`;
+  const canvas = host.querySelector('.lecture-canvas');
+  canvas.style.width = `${canvasWidth}px`; canvas.style.height = `${height}px`;
+  const labels = host.querySelector('.lecture-labels');
+  labels.setAttribute('viewBox', `0 0 ${gridX} ${height}`);
+  labels.style.width = `${gridX}px`; labels.style.height = `${height}px`;
   svg.setAttribute('aria-label', `指令与周期动画，第 ${model.cycle} 周期`);
-  let markup = `<text x="15" y="33" class="lecture-axis">指令 / 周期</text>`;
+  let markup = '', labelMarkup = `<rect width="100%" height="100%" fill="#fff"/><path d="M${gridX - 1} 0 V${height}" stroke="#e1e8ec"/><text x="14" y="33" class="lecture-axis">指令 / 周期</text>`;
   for (let cycle = model.firstCycle; cycle <= model.endCycle; cycle++) markup += `<text x="${x(cycle) + columnWidth / 2}" y="34" text-anchor="middle" class="lecture-cycle ${cycle === model.cycle ? 'selected' : cycle > model.cycle ? 'future' : ''}">${cycle}</text>`;
   rows.forEach(row => {
-    const display = row.label.length > 37 ? row.label.slice(0, 35) + '…' : row.label;
-    markup += `<g class="lecture-row ${row.canceled ? 'canceled' : ''} ${row.bubble ? 'bubble' : ''}" data-instruction="${escape(row.id)}"><title>${escape(row.label)}</title><text x="14" y="${y(row.lane) + 26}" class="lecture-instruction">${escape(display)}</text>`;
+    const display = row.label.length > labelLimit ? row.label.slice(0, labelLimit - 1) + '…' : row.label;
+    const rowClass = `lecture-row ${row.canceled ? 'canceled' : ''} ${row.bubble ? 'bubble' : ''}`;
+    labelMarkup += `<g class="${rowClass}"><title>${escape(row.label)}</title><text x="12" y="${y(row.lane) + rowHeight * .66}" class="lecture-instruction" style="font-size:${labelSize}px">${escape(display)}</text></g>`;
+    markup += `<g class="${rowClass}" data-instruction="${escape(row.id)}"><title>${escape(row.label)}</title>`;
     for (const cell of row.cells) {
       if (cell.cycle < model.firstCycle) continue;
-      markup += `<g class="lecture-cell ${row.bubble ? 'bubble' : ''} ${cell.stalled ? 'held' : ''} ${cell.cycle === model.cycle ? 'current' : ''}" data-cycle="${cell.cycle}" data-stage="${cell.stage}" data-lane="${cell.lane}"><title>${escape(row.label)} · 第 ${cell.cycle} 周期 · ${cell.stage}${cell.stalled ? ' 保持' : ''}</title><rect x="${x(cell.cycle)}" y="${y(cell.lane)}" width="${columnWidth}" height="${rowHeight}"/><text x="${x(cell.cycle) + columnWidth / 2}" y="${y(cell.lane) + 27}" text-anchor="middle">${cell.stage}</text>${cell.stalled ? `<path d="M${x(cell.cycle) + 12} ${y(cell.lane) + 33} h${columnWidth - 24}"/>` : ''}</g>`;
+      markup += `<g class="lecture-cell ${row.bubble ? 'bubble' : ''} ${cell.stalled ? 'held' : ''} ${cell.cycle === model.cycle ? 'current' : ''}" data-cycle="${cell.cycle}" data-stage="${cell.stage}" data-lane="${cell.lane}"><title>${escape(row.label)} · 第 ${cell.cycle} 周期 · ${cell.stage}${cell.stalled ? ' 保持' : ''}</title><rect x="${x(cell.cycle)}" y="${y(cell.lane)}" width="${columnWidth}" height="${rowHeight}"/><text x="${x(cell.cycle) + columnWidth / 2}" y="${y(cell.lane) + rowHeight * .69}" text-anchor="middle">${cell.stage}</text>${cell.stalled ? `<path d="M${x(cell.cycle) + 12} ${y(cell.lane) + rowHeight - 6} h${columnWidth - 24}"/>` : ''}</g>`;
     }
     markup += '</g>';
   });
@@ -136,16 +152,26 @@ export function renderTimeline(host, model, animate = true) {
     markup += `<path class="lecture-stall-turn" data-instruction="${escape(row.id)}" data-cycle="${turn.cell.cycle}" d="M${boundary - 7} ${y(turn.previous.lane) + rowHeight / 2} H${boundary} V${y(turn.cell.lane) + rowHeight / 2} h7"/>`;
   }
   host.querySelector('.lecture-grid').innerHTML = markup;
+  labels.innerHTML = labelMarkup;
   const highlight = host.querySelector('.lecture-highlight');
   highlight.style.transform = `translateX(${x(model.cycle)}px)`;
   highlight.querySelector('rect').setAttribute('height', String(height - 14));
+  highlight.querySelector('rect').setAttribute('width', String(columnWidth));
   host.querySelector('.lecture-forwards').innerHTML = model.forwards.map((forward, index) => {
     const from = rowIndex.get(forward.from), to = rowIndex.get(forward.to), arrowX = x(model.cycle) + columnWidth - 5 - index * 8;
     return `<path d="M${arrowX} ${y(from) + 11} V${y(to) + rowHeight - 10}" marker-end="url(#timeline-arrowhead)"><title>${escape('val' + forward.port + ': ' + regName(forward.reg) + ' = ' + hex(forward.value))}</title></path>`;
   }).join('');
   const scroller = host.querySelector('.lecture-scroll'), target = x(model.cycle);
-  if (target + columnWidth > scroller.scrollLeft + scroller.clientWidth - 10 || target < scroller.scrollLeft) {
+  if (options.follow !== false && (target + columnWidth > scroller.scrollLeft + scroller.clientWidth - 10 || target < scroller.scrollLeft + gridX)) {
     scroller.scrollLeft = Math.max(0, target + columnWidth - scroller.clientWidth + 25);
+  }
+  if (options.follow !== false) {
+    const activeLanes = rows.flatMap(row => row.cells.filter(cell => cell.cycle === model.cycle).map(cell => cell.lane));
+    if (activeLanes.length) {
+      const bottom = y(Math.max(...activeLanes)) + rowHeight + 14;
+      if (bottom > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = bottom - scroller.clientHeight;
+      else if (y(Math.min(...activeLanes)) < scroller.scrollTop) scroller.scrollTop = y(Math.min(...activeLanes));
+    }
   }
   host.dataset.cycle = String(model.cycle);
 }

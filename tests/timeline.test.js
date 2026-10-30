@@ -2,11 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assemble, Pipeline } from '../src/core.js';
 import { EXAMPLES } from '../src/examples.js';
-import { buildTimeline, layoutTimelineRows } from '../src/timeline.js';
+import { buildTimeline, layoutTimelineRows, timelineGeometry } from '../src/timeline.js';
 
 const lecture = () => new Pipeline(assemble(EXAMPLES.find(example => example.id === 'lecture').source));
 const advance = (simulator, count) => { for (let i = 0; i < count; i++) simulator.step(); return buildTimeline(simulator.program, simulator); };
 const currentCells = model => model.rows.flatMap(row => row.cells.filter(cell => cell.cycle === model.cycle).map(cell => ({ label: row.label, bubble: row.bubble, canceled: row.canceled, ...cell })));
+
+test('responsive timeline leaves at least one full cycle beside fixed labels', () => {
+  for (const viewport of [248, 288, 360, 800, 1200, 1600]) for (const scale of [.8, 1, 1.2]) {
+    const geometry = timelineGeometry(viewport, scale);
+    assert(geometry.gridX + geometry.columnWidth <= viewport);
+    assert(geometry.labelLimit > 10);
+    assert(geometry.gridX <= 375);
+  }
+});
 
 test('initial frame shows the first fetch, pending source rows and no future cells', () => {
   const p = lecture(), model = buildTimeline(p.program, p);

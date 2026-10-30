@@ -9,6 +9,7 @@ const STAGE_NAMES = { F: ['取指', 'FETCH'], D: ['译码', 'DECODE'], E: ['执�
 let simulator, program, history = [], running = false, timer = null, pulseTimer = null, dirty = false;
 let currentTab = 'registers', numberFormat = 'hex', memoryStart = 0x100, runUntil = 5000, compiledSource = '', selectedExample = EXAMPLES[0];
 let visualization = new URL(window.location.href).searchParams.get('view') === 'timeline' ? 'timeline' : 'datapath';
+let focusScroll = 0;
 const source = $('source');
 const valueText = value => numberFormat === 'dec' ? String(value) : hex(value, 16);
 const shortHex = value => { const text = hex(value); return text.length > 14 ? text.slice(0, 6) + '…' + text.slice(-5) : text; };
@@ -90,7 +91,12 @@ function render() {
   renderNotice(s);
   $('datapath-panel').hidden = visualization !== 'datapath';
   $('timeline-panel').hidden = visualization !== 'timeline';
-  if (visualization === 'timeline') renderTimeline($('cycle-animation'), buildTimeline(program, simulator), $('animate').checked);
+  if (visualization === 'timeline') {
+    const model = buildTimeline(program, simulator);
+    renderTimeline($('cycle-animation'), model, $('animate').checked, { scale: Number($('timeline-zoom').value), follow: $('timeline-follow').checked });
+    $('timeline-range').textContent = `周期 ${model.firstCycle}–${model.cycle} · 单击方格单步`;
+    $('cycle-animation').setAttribute('aria-disabled', String(dirty || running || simulator.status !== 'AOK'));
+  }
   else renderDiagram(s);
   renderState(s);
   for (const key of ['ZF', 'SF', 'OF']) { const flag = $('flag-' + key); flag.classList.toggle('on', simulator.cc[key]); flag.querySelector('b').textContent = Number(simulator.cc[key]); }
@@ -257,11 +263,19 @@ function selectTab(tab) {
 function download() {
   const objectCode=$('file-type').textContent==='.yo';
   const url=URL.createObjectURL(new Blob([source.value],{type:'text/plain;charset=utf-8'}));
-  const a=document.createElement('a');a.href=url;a.download=objectCode?'program.yo':'program.ys';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  const a=document.createElement('a');a.href=url;a.download=(EXAMPLES.find(e=>e.id===$('examples').value)?.id || 'program')+(objectCode?'.yo':'.ys');a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
-$('examples').innerHTML = '<option value="custom">自定义程序 / 本地草稿</option>' + EXAMPLES.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
-$('examples').addEventListener('change',()=>{ const next=EXAMPLES.find(e=>e.id===$('examples').value); if(!next)return;selectedExample=next;source.value=next.source;source.scrollTop=0;lineNumbers();setExampleNote(next);memoryStart=next.id==='sum'?0x180:next.id==='stack'?0x1c0:0x100;compile(); });
+const exampleGroups = [['基础与综合', 0, 7], ['课件：数据转发', 7, 10], ['课件：栈与编码', 10, 14], ['课件：控制与冒险', 14, EXAMPLES.length]];
+const exampleOptions = '<option value="custom">自定义程序 / 本地草稿</option>' + exampleGroups.map(([name, start, end])=>`<optgroup label="${name}">${EXAMPLES.slice(start,end).map(e=>`<option value="${e.id}">${escape(e.name)}</option>`).join('')}</optgroup>`).join('');
+function syncExample(id) { $('examples').value = id; $('quick-example').value = id; }
+function loadExample(id) {
+  const next=EXAMPLES.find(e=>e.id===id);
+  if(!next) { selectedExample=null;syncExample('custom');setExampleNote(null);return; }
+  selectedExample=next; syncExample(next.id); source.value=next.source;source.scrollTop=0;
+  lineNumbers();setExampleNote(next);memoryStart=next.id==='sum'?0x180:next.id==='stack'?0x1c0:0x100;compile();
+}
+for (const id of ['examples', 'quick-example']) { $(id).innerHTML = exampleOptions; $(id).addEventListener('change', event=>loadExample(event.target.value)); }
 $('compile').addEventListener('click',compile);$('step').addEventListener('click',step);$('run').addEventListener('click',toggleRun);$('back').addEventListener('click',back);$('reset').addEventListener('click',reset);
 function selectVisualization(view) {
   visualization = view;
@@ -274,15 +288,26 @@ document.querySelectorAll('[data-view]').forEach(button => {
   button.addEventListener('click', () => selectVisualization(button.dataset.view));
   button.addEventListener('keydown', event => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); const view = event.key === 'Home' ? 'datapath' : event.key === 'End' ? 'timeline' : visualization === 'datapath' ? 'timeline' : 'datapath'; selectVisualization(view); $('view-' + view).focus(); });
 });
-$('cycle-animation').addEventListener('click', event => { if (event.target.closest('svg') && !running) step(); });
-$('cycle-animation').addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (!running) step(); } });
+$('cycle-animation').addEventListener('click', event => { if (event.target.closest('.lecture-cell') && !running) step(); });
+$('cycle-animation').addEventListener('keydown', event => { if (event.target === $('cycle-animation') && ['Enter', ' '].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (!running) step(); } });
 $('speed').addEventListener('input',()=>{$('speed-label').textContent=$('speed').value+' Hz';});
 $('animate').addEventListener('change',()=>{if(!$('animate').checked){clearTimeout(pulseTimer);pulseTimer=null;}$('datapath').classList.toggle('flow',$('animate').checked&&running);$('cycle-animation').classList.toggle('animation-off',!$('animate').checked);});
-source.addEventListener('input',()=>{dirty=source.value!==compiledSource;stop(false);lineNumbers();saveDraft();$('examples').value='custom';setExampleNote(null);render();});
+for (const id of ['timeline-zoom', 'timeline-follow']) $(id).addEventListener('change', render);
+function setFocusView(focused) {
+  if (focused) focusScroll = window.scrollY;
+  document.body.classList.toggle('focus-view', focused);
+  $('focus-view').setAttribute('aria-pressed', String(focused));
+  $('focus-view').textContent = focused ? '退出专注 ↙' : '专注模式 ⤢';
+  render(); window.scrollTo({ top: focused ? 0 : focusScroll, behavior: 'instant' });
+}
+$('focus-view').addEventListener('click',()=>setFocusView(!document.body.classList.contains('focus-view')));
+let lastVisualizationWidth = 0;
+new ResizeObserver(entries=>{ const width = Math.round(entries[0].contentRect.width); if (width !== lastVisualizationWidth) { lastVisualizationWidth = width; if (simulator) render(); } }).observe(document.querySelector('.simulator'));
+source.addEventListener('input',()=>{dirty=source.value!==compiledSource;stop(false);lineNumbers();saveDraft();selectedExample=null;syncExample('custom');setExampleNote(null);render();});
 source.addEventListener('scroll',()=>{$('line-numbers').scrollTop=source.scrollTop;});
 source.addEventListener('keydown',event=>{if(event.key==='Tab'){event.preventDefault();const start=source.selectionStart,end=source.selectionEnd;source.setRangeText('    ',start,end,'end');source.dispatchEvent(new Event('input'));}});
 $('import-button').addEventListener('click',()=>$('file-input').click());
-$('file-input').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;if(file.size>512000){toast('请导入小于 500 KiB 的 .ys 或 .yo 文件。');event.target.value='';return;}try{source.value=await file.text();$('examples').value='custom';setExampleNote(null);lineNumbers();compile();}catch{toast('文件读取失败，请重试。');}event.target.value='';});
+$('file-input').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;if(file.size>512000){toast('请导入小于 500 KiB 的 .ys 或 .yo 文件。');event.target.value='';return;}try{source.value=await file.text();selectedExample=null;syncExample('custom');setExampleNote(null);lineNumbers();compile();}catch{toast('文件读取失败，请重试。');}event.target.value='';});
 $('export-button').addEventListener('click',download);
 document.querySelectorAll('[data-tab]').forEach(button=>{button.addEventListener('click',()=>selectTab(button.dataset.tab));button.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const tabs=[...document.querySelectorAll('[data-tab]')],i=tabs.indexOf(button);const index=event.key==='Home'?0:event.key==='End'?tabs.length-1:(i+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;selectTab(tabs[index].dataset.tab);tabs[index].focus();});});
 document.querySelectorAll('[data-format]').forEach(button=>button.addEventListener('click',()=>{numberFormat=button.dataset.format;document.querySelectorAll('[data-format]').forEach(b=>{b.classList.toggle('active',b===button);b.setAttribute('aria-pressed',String(b===button));});renderState(simulator.evaluate());}));
@@ -303,16 +328,17 @@ $('state-content').addEventListener('keydown',event=>{if(event.target.id==='memo
 $('help-button').addEventListener('click',()=>{stop();$('help-dialog').showModal();});$('close-help').addEventListener('click',()=>$('help-dialog').close());
 $('help-dialog').addEventListener('click',event=>{if(event.target===$('help-dialog')){const r=event.target.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.target.close();}});
 document.addEventListener('keydown',event=>{
+  if(event.key==='Escape' && document.body.classList.contains('focus-view') && !$('help-dialog').open) { setFocusView(false); $('focus-view').focus({preventScroll:true}); return; }
   if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();compile();return;}
-  if($('help-dialog').open||event.target.closest('textarea,input,select,[role=tab]'))return;
+  if($('help-dialog').open||event.target.closest('textarea,input,select,[role=tab],.lecture-scroll'))return;
   if(event.key==='ArrowRight'){event.preventDefault();if(!running)step();}
   if(event.key==='ArrowLeft'){event.preventDefault();back();}
-  if(event.code==='Space'){event.preventDefault();toggleRun();}
+  if(event.code==='Space'&&!event.target.closest('button,a')){event.preventDefault();toggleRun();}
 });
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)stop();});
 let draft='';try{draft=localStorage.getItem('ics-pipeline-source-v1')||'';}catch{}
 source.value=draft||EXAMPLES[0].source;selectedExample=EXAMPLES.find(e=>e.source===source.value)||null;
-$('examples').value=selectedExample?.id||'custom';setExampleNote(selectedExample);lineNumbers();compile();
+syncExample(selectedExample?.id||'custom');setExampleNote(selectedExample);lineNumbers();compile();
 selectVisualization(visualization);
 
 // Read-only diagnostic view for browser QA and instructional console inspection.
